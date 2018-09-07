@@ -1,0 +1,35 @@
+{% set os_version_grain = salt['grains.filter_by']({
+    'Windows': 'osrelease',
+    'default': 'osmajorrelease',
+    })
+%}
+
+{% set state1 = salt['grains.filter_by'](
+    salt['grains.filter_by']({
+        'RedHat': {
+            '7': {
+                'file_location': '/tmp/rhel-7'
+            },
+            '6': {
+            },
+            'default': {
+            }
+        },
+        'Windows': {
+            '2016Server': {
+            },
+            '2012ServerR2': {
+            },
+            '2008ServerR2': {
+            },
+            'default': {
+                'file_location': 'c:/all-windows.txt',
+            }
+        },
+        'default': {
+            'default': {
+                'file_location': '/tmp/everything.txt'
+            }
+        }
+    }, base='default'),
+    grain=os_version_grain, base='default') %}

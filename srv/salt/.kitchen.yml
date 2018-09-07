@@ -1,0 +1,648 @@
+driver:
+  name: ec2
+  aws_ssh_key_id: your-key-id
+  security_group_ids: ['sg-xxxx']
+  region: us-east-1
+  availability_zone: a
+  subnet_id: subnet-xxxx
+  associate_public_ip: false
+  interface: private
+  retryable_sleep: 10
+
+transport:
+  ssh_key: ~/.ssh/kitchen-test-key
+  max_wait_until_ready: 1800
+
+provisioner:
+  name: salt_solo
+  is_file_root: true
+  require_chef: false
+
+platforms:
+  - name: ubuntu-1804-salt-latest-ec2
+    driver:
+      image_search:
+        owner-id: "679593333241"
+        name: 'ubuntu/images/hvm-ssd/ubuntu-bionic-18.04-amd64-server*'
+      user_data: |
+        Content-Type: multipart/mixed; boundary="===============3662748589962840009=="
+        MIME-Version: 1.0
+        
+        --===============3662748589962840009==
+        Content-Type: text/x-shellscript; charset="us-ascii"
+        MIME-Version: 1.0
+        Content-Transfer-Encoding: 7bit
+        
+        #!/bin/bash
+        
+        
+        # update
+        # tell cloud-init to re-run on next boot (in case we need to reboot after patching)
+        if [ ! -e /etc/cloud/cloud.cfg.d/99_final.cfg ]
+        then
+            echo "cloud_final_modules:" >> /etc/cloud/cloud.cfg.d/99_final.cfg
+            echo "  - [scripts-user, always]" >> /etc/cloud/cloud.cfg.d/99_final.cfg
+        fi
+        apt-get update -q -y
+        DEBIAN_FRONTEND=noninteractive apt-get upgrade -q -y
+        test -f /var/run/reboot-required && reboot -f
+        rm -rf /etc/cloud/cloud.cfg.d/99_final.cfg
+        
+        # install salt using the bootstrap
+        wget https://raw.githubusercontent.com/saltstack/salt-bootstrap/stable/bootstrap-salt.sh -O /tmp/bootstrap.sh
+        sh /tmp/bootstrap.sh -X
+        
+        # add an additional ssh key, which kitchen will be using to connect
+        # this ensurs that our userdata has completed before kitchen moves on
+        # otherwise, as soon as kitchen can login with the key, it will start converging
+        echo 'ssh-rsa KEYDATA' >> /home/ubuntu/.ssh/authorized_keys
+        
+        --===============3662748589962840009==--
+      block_device_mappings:
+        - device_name: /dev/sda1
+          ebs:
+            volume_size: 20
+            delete_on_termination: true
+      tags:
+        Name: rhel-7-salt-latest-ec2
+    provisioner:
+      salt_minion_config_template: '<%= File.expand_path(File.dirname(__FILE__)) %>/tests/integration/aws_minion.erb'
+  - name: centos-7-salt-latest-ec2
+    driver:
+      image_search:
+        owner-id: "679593333241"
+        name: 'CentOS Linux 7 x86_64 HVM EBS ENA*'
+      user_data: |
+        Content-Type: multipart/mixed; boundary="===============3662748589962840009=="
+        MIME-Version: 1.0
+        
+        --===============3662748589962840009==
+        Content-Type: text/x-shellscript; charset="us-ascii"
+        MIME-Version: 1.0
+        Content-Transfer-Encoding: 7bit
+        
+        #!/bin/bash
+        
+        
+        # yum update
+        # tell cloud-init to re-run on next boot (in case we need to reboot after patching)
+        if [ ! -e /etc/cloud/cloud.cfg.d/99_final.cfg ]
+        then
+            echo "cloud_final_modules:" >> /etc/cloud/cloud.cfg.d/99_final.cfg
+            echo "  - [scripts-user, always]" >> /etc/cloud/cloud.cfg.d/99_final.cfg
+        fi
+        yum --quiet clean expire-cache
+        yum install -y wget
+        yum update -y
+        needs-restarting -r || reboot -f 
+        rm -rf /etc/cloud/cloud.cfg.d/99_final.cfg
+        
+        echo 'http_caching=none' >> /etc/yum.conf
+        
+        # install salt using the bootstrap
+        wget https://raw.githubusercontent.com/saltstack/salt-bootstrap/stable/bootstrap-salt.sh -O /tmp/bootstrap.sh
+        sh /tmp/bootstrap.sh -X
+        
+        # add an additional ssh key, which kitchen will be using to connect
+        # this ensurs that our userdata has completed before kitchen moves on
+        # otherwise, as soon as kitchen can login with the key, it will start converging
+        echo 'ssh-rsa KEYDATA' >> /home/centos/.ssh/authorized_keys
+        
+        --===============3662748589962840009==--
+      block_device_mappings:
+        - device_name: /dev/sda1
+          ebs:
+            volume_size: 20
+            delete_on_termination: true
+      tags:
+        Name: rhel-7-salt-latest-ec2
+    provisioner:
+      salt_minion_config_template: '<%= File.expand_path(File.dirname(__FILE__)) %>/tests/integration/aws_minion.erb'
+  - name: windows-2012r2-salt-2018-3-py2-ec2
+    provisioner:
+      salt_bootstrap_url: https://raw.githubusercontent.com/saltstack/salt-bootstrap/stable/bootstrap-salt.ps1
+      salt_bootstrap_options: -runservice false
+      salt_minion_config_template: '<%= File.expand_path(File.dirname(__FILE__)) %>/tests/integration/aws_sandbox_minion.erb'
+    transport:
+      name: winrm
+      ssh_key: ~/.ssh/kitchen-salt.pem
+      connection_retries: 10
+    driver:
+      image_search:
+        owner-id: "801119661308"
+        name: Windows_Server-2012-R2_RTM-English-64Bit-Base-*
+      user_data: |
+        <powershell>
+        $logfile="C:\Program Files\Amazon\Ec2ConfigService\Logs\kitchen-ec2.log"
+        if (-Not $(test-path c:\temp)) {
+            new-item -path c:\temp -itemtype directory
+        }
+        Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Force
+        $successful_download = $false
+        #EC2 will not always download successfully on first try, so we try until we get the file
+        #maybe I should check the download hash too
+        while (-Not $successful_download) {
+            $web_client = New-Object System.Net.WebClient
+            $web_client.DownloadFile("https://repo.saltstack.com/windows/Salt-Minion-2018.3.2-Py2-AMD64-Setup.exe", "c:\temp\salt-minion-installer.exe")
+            if ($?) {
+                $successful_download = $true
+            }else{
+                write-host sleeping 30 seconds
+                start-sleep 30
+            }
+        }
+        start-process -FilePath c:\temp\salt-minion-installer.exe -WorkingDir c:\temp -ArgumentList "/S" -Wait
+        stop-service salt-minion
+        c:\windows\system32\winrm.cmd quickconfig -q >> $logfile
+        c:\windows\system32\winrm.cmd quickconfig -transport:http >> $logfile
+        c:\windows\system32\winrm.cmd set winrm/config '@{MaxTimeoutms="1800000"}' >> $logfile
+        c:\windows\system32\winrm.cmd set winrm/config/winrs '@{MaxMemoryPerShellMB="2048"}' >> $logfile
+        c:\windows\system32\winrm.cmd set winrm/config/winrs '@{MaxProcessesPerShell="100"}' >> $logfile
+        c:\windows\system32\winrm.cmd set winrm/config/service '@{AllowUnencrypted="true"}' >> $logfile
+        c:\windows\system32\winrm.cmd set winrm/config/listener?Address=*+Transport=HTTP '@{Port="5985"}' >> $logfile
+        Set-Item wsman:\localhost\plugin\microsoft.powershell\Quotas\MaxMemoryPerShellMB 2048 >> $logfile 2>&1
+        restart-service winrm
+        c:\windows\system32\winrm.cmd set winrm/config/service/auth '@{Basic="true"}' >> $logfile
+        c:\windows\system32\netsh.exe advfirewall firewall set rule name="Windows Remote Management (HTTP-In)" profile=public protocol=tcp localport=5985 remoteip=localsubnet new remoteip=any  >> $logfile
+        </powershell>
+      block_device_mappings:
+        - device_name: /dev/sda1
+          ebs:
+            delete_on_termination: true
+      tags:
+        Name: windows-2012r2-salt-2018-3-py2-ec2
+  - name: windows-2016-salt-2018-3-py2-ec2
+    provisioner:
+      salt_bootstrap_url: https://raw.githubusercontent.com/saltstack/salt-bootstrap/stable/bootstrap-salt.ps1
+      salt_bootstrap_options: -runservice false
+      salt_minion_config_template: '<%= File.expand_path(File.dirname(__FILE__)) %>/tests/integration/aws_sandbox_minion.erb'
+    transport:
+      name: winrm
+      ssh_key: ~/.ssh/kitchen-salt.pem
+      connection_retries: 10
+      #operation_timeout: 600
+    driver:
+      image_search:
+        owner-id: "801119661308"
+        name: Windows_Server-2016-English-Full-Base-*
+      user_data: |
+        <powershell>
+        $logfile="C:\ProgramData\Amazon\EC2-Windows\Launch\Log\kitchen-ec2.log"
+        if (-Not $(test-path c:\temp)) {
+            new-item -path c:\temp -itemtype directory
+        }
+        Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Force
+        $successful_download = $false
+        #EC2 will not always download successfully on first try, so we try until we get the file
+        #maybe I should check the download hash too
+        while (-Not $successful_download) {
+            $web_client = New-Object System.Net.WebClient
+            $web_client.DownloadFile("https://repo.saltstack.com/windows/Salt-Minion-2018.3.2-Py2-AMD64-Setup.exe", "c:\temp\salt-minion-installer.exe")
+            if ($?) {
+                $successful_download = $true
+            }else{
+                write-host sleeping 30 seconds
+                start-sleep 30
+            }
+        }
+        start-process -FilePath c:\temp\salt-minion-installer.exe -WorkingDir c:\temp -ArgumentList "/S" -Wait
+        stop-service salt-minion
+        c:\windows\system32\winrm.cmd quickconfig -q >> $logfile
+        c:\windows\system32\winrm.cmd quickconfig -transport:http >> $logfile
+        c:\windows\system32\winrm.cmd set winrm/config '@{MaxTimeoutms="1800000"}' >> $logfile
+        c:\windows\system32\winrm.cmd set winrm/config/winrs '@{MaxMemoryPerShellMB="2048"}' >> $logfile
+        c:\windows\system32\winrm.cmd set winrm/config/winrs '@{MaxProcessesPerShell="100"}' >> $logfile
+        c:\windows\system32\winrm.cmd set winrm/config/service '@{AllowUnencrypted="true"}' >> $logfile
+        c:\windows\system32\winrm.cmd set winrm/config/listener?Address=*+Transport=HTTP '@{Port="5985"}' >> $logfile
+        Set-Item wsman:\localhost\plugin\microsoft.powershell\Quotas\MaxMemoryPerShellMB 2048 >> $logfile 2>&1
+        restart-service winrm
+        c:\windows\system32\winrm.cmd set winrm/config/service/auth '@{Basic="true"}' >> $logfile
+        c:\windows\system32\netsh.exe advfirewall firewall set rule name="Windows Remote Management (HTTP-In)" profile=public protocol=tcp localport=5985 remoteip=localsubnet new remoteip=any  >> $logfile
+        </powershell>
+      block_device_mappings:
+        - device_name: /dev/sda1
+          ebs:
+            delete_on_termination: true
+      tags:
+        Name: windows-2016-salt-2018-3-py2-ec2
+  - name: windows-2012r2-salt-2018-3-py3-ec2
+    provisioner:
+      salt_bootstrap_url: https://raw.githubusercontent.com/saltstack/salt-bootstrap/stable/bootstrap-salt.ps1
+      salt_bootstrap_options: -runservice false
+      salt_minion_config_template: '<%= File.expand_path(File.dirname(__FILE__)) %>/tests/integration/aws_sandbox_minion.erb'
+    transport:
+      name: winrm
+      ssh_key: ~/.ssh/kitchen-salt.pem
+      connection_retries: 10
+      #operation_timeout: 600
+    driver:
+      image_search:
+        owner-id: "801119661308"
+        name: Windows_Server-2012-R2_RTM-English-64Bit-Base-*
+      user_data: |
+        <powershell>
+        $logfile="C:\Program Files\Amazon\Ec2ConfigService\Logs\kitchen-ec2.log"
+        if (-Not $(test-path c:\temp)) {
+            new-item -path c:\temp -itemtype directory
+        }
+        Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Force
+        $successful_download = $false
+        #EC2 will not always download successfully on first try, so we try until we get the file
+        #maybe I should check the download hash too
+        while (-Not $successful_download) {
+            $web_client = New-Object System.Net.WebClient
+            $web_client.DownloadFile("https://repo.saltstack.com/windows/Salt-Minion-2018.3.2-Py3-AMD64-Setup.exe", "c:\temp\salt-minion-installer.exe")
+            if ($?) {
+                $successful_download = $true
+            }else{
+                write-host sleeping 30 seconds
+                start-sleep 30
+            }
+        }
+        start-process -FilePath c:\temp\salt-minion-installer.exe -WorkingDir c:\temp -ArgumentList "/S" -Wait
+        stop-service salt-minion
+        c:\windows\system32\winrm.cmd quickconfig -q >> $logfile
+        c:\windows\system32\winrm.cmd quickconfig -transport:http >> $logfile
+        c:\windows\system32\winrm.cmd set winrm/config '@{MaxTimeoutms="1800000"}' >> $logfile
+        c:\windows\system32\winrm.cmd set winrm/config/winrs '@{MaxMemoryPerShellMB="2048"}' >> $logfile
+        c:\windows\system32\winrm.cmd set winrm/config/winrs '@{MaxProcessesPerShell="100"}' >> $logfile
+        c:\windows\system32\winrm.cmd set winrm/config/service '@{AllowUnencrypted="true"}' >> $logfile
+        c:\windows\system32\winrm.cmd set winrm/config/listener?Address=*+Transport=HTTP '@{Port="5985"}' >> $logfile
+        Set-Item wsman:\localhost\plugin\microsoft.powershell\Quotas\MaxMemoryPerShellMB 2048 >> $logfile 2>&1
+        restart-service winrm
+        c:\windows\system32\winrm.cmd set winrm/config/service/auth '@{Basic="true"}' >> $logfile
+        c:\windows\system32\netsh.exe advfirewall firewall set rule name="Windows Remote Management (HTTP-In)" profile=public protocol=tcp localport=5985 remoteip=localsubnet new remoteip=any  >> $logfile
+        </powershell>
+      block_device_mappings:
+        - device_name: /dev/sda1
+          ebs:
+            delete_on_termination: true
+      tags:
+        Name: windows-2012r2-salt-2018-3-py3-ec2
+  - name: windows-2016-salt-2018-3-py3-ec2
+    provisioner:
+      salt_bootstrap_url: https://raw.githubusercontent.com/saltstack/salt-bootstrap/stable/bootstrap-salt.ps1
+      salt_bootstrap_options: -runservice false
+      salt_minion_config_template: '<%= File.expand_path(File.dirname(__FILE__)) %>/tests/integration/aws_sandbox_minion.erb'
+    transport:
+      name: winrm
+      ssh_key: ~/.ssh/kitchen-salt.pem
+      connection_retries: 10
+      #operation_timeout: 600
+    driver:
+      image_search:
+        owner-id: "801119661308"
+        name: Windows_Server-2016-English-Full-Base-*
+      user_data: |
+        <powershell>
+        $logfile="C:\ProgramData\Amazon\EC2-Windows\Launch\Log\kitchen-ec2.log"
+        if (-Not $(test-path c:\temp)) {
+            new-item -path c:\temp -itemtype directory
+        }
+        Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Force
+        $successful_download = $false
+        #EC2 will not always download successfully on first try, so we try until we get the file
+        #maybe I should check the download hash too
+        while (-Not $successful_download) {
+            $web_client = New-Object System.Net.WebClient
+            $web_client.DownloadFile("https://repo.saltstack.com/windows/Salt-Minion-2018.3.2-Py3-AMD64-Setup.exe", "c:\temp\salt-minion-installer.exe")
+            if ($?) {
+                $successful_download = $true
+            }else{
+                write-host sleeping 30 seconds
+                start-sleep 30
+            }
+        }
+        start-process -FilePath c:\temp\salt-minion-installer.exe -WorkingDir c:\temp -ArgumentList "/S" -Wait
+        stop-service salt-minion
+        c:\windows\system32\winrm.cmd quickconfig -q >> $logfile
+        c:\windows\system32\winrm.cmd quickconfig -transport:http >> $logfile
+        c:\windows\system32\winrm.cmd set winrm/config '@{MaxTimeoutms="1800000"}' >> $logfile
+        c:\windows\system32\winrm.cmd set winrm/config/winrs '@{MaxMemoryPerShellMB="2048"}' >> $logfile
+        c:\windows\system32\winrm.cmd set winrm/config/winrs '@{MaxProcessesPerShell="100"}' >> $logfile
+        c:\windows\system32\winrm.cmd set winrm/config/service '@{AllowUnencrypted="true"}' >> $logfile
+        c:\windows\system32\winrm.cmd set winrm/config/listener?Address=*+Transport=HTTP '@{Port="5985"}' >> $logfile
+        Set-Item wsman:\localhost\plugin\microsoft.powershell\Quotas\MaxMemoryPerShellMB 2048 >> $logfile 2>&1
+        restart-service winrm
+        c:\windows\system32\winrm.cmd set winrm/config/service/auth '@{Basic="true"}' >> $logfile
+        c:\windows\system32\netsh.exe advfirewall firewall set rule name="Windows Remote Management (HTTP-In)" profile=public protocol=tcp localport=5985 remoteip=localsubnet new remoteip=any  >> $logfile
+        </powershell>
+      block_device_mappings:
+        - device_name: /dev/sda1
+          ebs:
+            delete_on_termination: true
+      tags:
+        Name: windows-2016-salt-2018-3-py3-ec2
+  - name: windows-2012r2-salt-2017-7-py2-ec2
+    provisioner:
+      salt_bootstrap_url: https://raw.githubusercontent.com/saltstack/salt-bootstrap/stable/bootstrap-salt.ps1
+      salt_bootstrap_options: -runservice false
+      salt_minion_config_template: '<%= File.expand_path(File.dirname(__FILE__)) %>/tests/integration/aws_sandbox_minion.erb'
+    transport:
+      name: winrm
+      ssh_key: ~/.ssh/kitchen-salt.pem
+      connection_retries: 10
+      #operation_timeout: 600
+    driver:
+      image_search:
+        owner-id: "801119661308"
+        name: Windows_Server-2012-R2_RTM-English-64Bit-Base-*
+      user_data: |
+        <powershell>
+        $logfile="C:\Program Files\Amazon\Ec2ConfigService\Logs\kitchen-ec2.log"
+        if (-Not $(test-path c:\temp)) {
+            new-item -path c:\temp -itemtype directory
+        }
+        Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Force
+        $successful_download = $false
+        #EC2 will not always download successfully on first try, so we try until we get the file
+        #maybe I should check the download hash too
+        while (-Not $successful_download) {
+            $web_client = New-Object System.Net.WebClient
+            $web_client.DownloadFile("https://repo.saltstack.com/windows/Salt-Minion-2017.7.7-Py2-AMD64-Setup.exe", "c:\temp\salt-minion-installer.exe")
+            if ($?) {
+                $successful_download = $true
+            }else{
+                write-host sleeping 30 seconds
+                start-sleep 30
+            }
+        }
+        start-process -FilePath c:\temp\salt-minion-installer.exe -WorkingDir c:\temp -ArgumentList "/S" -Wait
+        stop-service salt-minion
+        c:\windows\system32\winrm.cmd quickconfig -q >> $logfile
+        c:\windows\system32\winrm.cmd quickconfig -transport:http >> $logfile
+        c:\windows\system32\winrm.cmd set winrm/config '@{MaxTimeoutms="1800000"}' >> $logfile
+        c:\windows\system32\winrm.cmd set winrm/config/winrs '@{MaxMemoryPerShellMB="2048"}' >> $logfile
+        c:\windows\system32\winrm.cmd set winrm/config/winrs '@{MaxProcessesPerShell="100"}' >> $logfile
+        c:\windows\system32\winrm.cmd set winrm/config/service '@{AllowUnencrypted="true"}' >> $logfile
+        c:\windows\system32\winrm.cmd set winrm/config/listener?Address=*+Transport=HTTP '@{Port="5985"}' >> $logfile
+        Set-Item wsman:\localhost\plugin\microsoft.powershell\Quotas\MaxMemoryPerShellMB 2048 >> $logfile 2>&1
+        restart-service winrm
+        c:\windows\system32\winrm.cmd set winrm/config/service/auth '@{Basic="true"}' >> $logfile
+        c:\windows\system32\netsh.exe advfirewall firewall set rule name="Windows Remote Management (HTTP-In)" profile=public protocol=tcp localport=5985 remoteip=localsubnet new remoteip=any  >> $logfile
+        </powershell>
+      block_device_mappings:
+        - device_name: /dev/sda1
+          ebs:
+            delete_on_termination: true
+      tags:
+        Name: windows-2012r2-salt-2017-7-py2-ec2
+  - name: windows-2016-salt-2017-7-py2-ec2
+    provisioner:
+      salt_bootstrap_url: https://raw.githubusercontent.com/saltstack/salt-bootstrap/stable/bootstrap-salt.ps1
+      salt_bootstrap_options: -runservice false
+      salt_minion_config_template: '<%= File.expand_path(File.dirname(__FILE__)) %>/tests/integration/aws_sandbox_minion.erb'
+    transport:
+      name: winrm
+      ssh_key: ~/.ssh/kitchen-salt.pem
+      connection_retries: 10
+      #operation_timeout: 600
+    driver:
+      image_search:
+        owner-id: "801119661308"
+        name: Windows_Server-2016-English-Full-Base-*
+      user_data: |
+        <powershell>
+        $logfile="C:\ProgramData\Amazon\EC2-Windows\Launch\Log\kitchen-ec2.log"
+        if (-Not $(test-path c:\temp)) {
+            new-item -path c:\temp -itemtype directory
+        }
+        Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Force
+        $successful_download = $false
+        #EC2 will not always download successfully on first try, so we try until we get the file
+        #maybe I should check the download hash too
+        while (-Not $successful_download) {
+            $web_client = New-Object System.Net.WebClient
+            $web_client.DownloadFile("https://repo.saltstack.com/windows/Salt-Minion-2017.7.7-Py2-AMD64-Setup.exe", "c:\temp\salt-minion-installer.exe")
+            if ($?) {
+                $successful_download = $true
+            }else{
+                write-host sleeping 30 seconds
+                start-sleep 30
+            }
+        }
+        start-process -FilePath c:\temp\salt-minion-installer.exe -WorkingDir c:\temp -ArgumentList "/S" -Wait
+        stop-service salt-minion
+        c:\windows\system32\winrm.cmd quickconfig -q >> $logfile
+        c:\windows\system32\winrm.cmd quickconfig -transport:http >> $logfile
+        c:\windows\system32\winrm.cmd set winrm/config '@{MaxTimeoutms="1800000"}' >> $logfile
+        c:\windows\system32\winrm.cmd set winrm/config/winrs '@{MaxMemoryPerShellMB="2048"}' >> $logfile
+        c:\windows\system32\winrm.cmd set winrm/config/winrs '@{MaxProcessesPerShell="100"}' >> $logfile
+        c:\windows\system32\winrm.cmd set winrm/config/service '@{AllowUnencrypted="true"}' >> $logfile
+        c:\windows\system32\winrm.cmd set winrm/config/listener?Address=*+Transport=HTTP '@{Port="5985"}' >> $logfile
+        Set-Item wsman:\localhost\plugin\microsoft.powershell\Quotas\MaxMemoryPerShellMB 2048 >> $logfile 2>&1
+        restart-service winrm
+        c:\windows\system32\winrm.cmd set winrm/config/service/auth '@{Basic="true"}' >> $logfile
+        c:\windows\system32\netsh.exe advfirewall firewall set rule name="Windows Remote Management (HTTP-In)" profile=public protocol=tcp localport=5985 remoteip=localsubnet new remoteip=any  >> $logfile
+        </powershell>
+      block_device_mappings:
+        - device_name: /dev/sda1
+          ebs:
+            delete_on_termination: true
+      tags:
+        Name: windows-2016-salt-2017-7-py2-ec2
+  - name: windows-2012r2-salt-2017-7-py3-ec2
+    provisioner:
+      salt_bootstrap_url: https://raw.githubusercontent.com/saltstack/salt-bootstrap/stable/bootstrap-salt.ps1
+      salt_bootstrap_options: -runservice false
+      salt_minion_config_template: '<%= File.expand_path(File.dirname(__FILE__)) %>/tests/integration/aws_sandbox_minion.erb'
+    transport:
+      name: winrm
+      ssh_key: ~/.ssh/kitchen-salt.pem
+      connection_retries: 10
+      #operation_timeout: 600
+    driver:
+      image_search:
+        owner-id: "801119661308"
+        name: Windows_Server-2012-R2_RTM-English-64Bit-Base-*
+      user_data: |
+        <powershell>
+        $logfile="C:\Program Files\Amazon\Ec2ConfigService\Logs\kitchen-ec2.log"
+        if (-Not $(test-path c:\temp)) {
+            new-item -path c:\temp -itemtype directory
+        }
+        Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Force
+        $successful_download = $false
+        #EC2 will not always download successfully on first try, so we try until we get the file
+        #maybe I should check the download hash too
+        while (-Not $successful_download) {
+            $web_client = New-Object System.Net.WebClient
+            $web_client.DownloadFile("https://repo.saltstack.com/windows/Salt-Minion-2017.7.7-Py3-AMD64-Setup.exe", "c:\temp\salt-minion-installer.exe")
+            if ($?) {
+                $successful_download = $true
+            }else{
+                write-host sleeping 30 seconds
+                start-sleep 30
+            }
+        }
+        start-process -FilePath c:\temp\salt-minion-installer.exe -WorkingDir c:\temp -ArgumentList "/S" -Wait
+        stop-service salt-minion
+        c:\windows\system32\winrm.cmd quickconfig -q >> $logfile
+        c:\windows\system32\winrm.cmd quickconfig -transport:http >> $logfile
+        c:\windows\system32\winrm.cmd set winrm/config '@{MaxTimeoutms="1800000"}' >> $logfile
+        c:\windows\system32\winrm.cmd set winrm/config/winrs '@{MaxMemoryPerShellMB="2048"}' >> $logfile
+        c:\windows\system32\winrm.cmd set winrm/config/winrs '@{MaxProcessesPerShell="100"}' >> $logfile
+        c:\windows\system32\winrm.cmd set winrm/config/service '@{AllowUnencrypted="true"}' >> $logfile
+        c:\windows\system32\winrm.cmd set winrm/config/listener?Address=*+Transport=HTTP '@{Port="5985"}' >> $logfile
+        Set-Item wsman:\localhost\plugin\microsoft.powershell\Quotas\MaxMemoryPerShellMB 2048 >> $logfile 2>&1
+        restart-service winrm
+        c:\windows\system32\winrm.cmd set winrm/config/service/auth '@{Basic="true"}' >> $logfile
+        c:\windows\system32\netsh.exe advfirewall firewall set rule name="Windows Remote Management (HTTP-In)" profile=public protocol=tcp localport=5985 remoteip=localsubnet new remoteip=any  >> $logfile
+        </powershell>
+      block_device_mappings:
+        - device_name: /dev/sda1
+          ebs:
+            delete_on_termination: true
+      tags:
+        Name: windows-2012r2-salt-2017-7-py3-ec2
+  - name: windows-2016-salt-2017-7-py3-ec2
+    provisioner:
+      salt_bootstrap_url: https://raw.githubusercontent.com/saltstack/salt-bootstrap/stable/bootstrap-salt.ps1
+      salt_bootstrap_options: -runservice false
+      salt_minion_config_template: '<%= File.expand_path(File.dirname(__FILE__)) %>/tests/integration/aws_sandbox_minion.erb'
+    transport:
+      name: winrm
+      ssh_key: ~/.ssh/kitchen-salt.pem
+      connection_retries: 10
+      #operation_timeout: 600
+    driver:
+      image_search:
+        owner-id: "801119661308"
+        name: Windows_Server-2016-English-Full-Base-*
+      user_data: |
+        <powershell>
+        $logfile="C:\ProgramData\Amazon\EC2-Windows\Launch\Log\kitchen-ec2.log"
+        if (-Not $(test-path c:\temp)) {
+            new-item -path c:\temp -itemtype directory
+        }
+        Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Force
+        $successful_download = $false
+        #EC2 will not always download successfully on first try, so we try until we get the file
+        #maybe I should check the download hash too
+        while (-Not $successful_download) {
+            $web_client = New-Object System.Net.WebClient
+            $web_client.DownloadFile("https://repo.saltstack.com/windows/Salt-Minion-2017.7.7-Py3-AMD64-Setup.exe", "c:\temp\salt-minion-installer.exe")
+            if ($?) {
+                $successful_download = $true
+            }else{
+                write-host sleeping 30 seconds
+                start-sleep 30
+            }
+        }
+        start-process -FilePath c:\temp\salt-minion-installer.exe -WorkingDir c:\temp -ArgumentList "/S" -Wait
+        stop-service salt-minion
+        c:\windows\system32\winrm.cmd quickconfig -q >> $logfile
+        c:\windows\system32\winrm.cmd quickconfig -transport:http >> $logfile
+        c:\windows\system32\winrm.cmd set winrm/config '@{MaxTimeoutms="1800000"}' >> $logfile
+        c:\windows\system32\winrm.cmd set winrm/config/winrs '@{MaxMemoryPerShellMB="2048"}' >> $logfile
+        c:\windows\system32\winrm.cmd set winrm/config/winrs '@{MaxProcessesPerShell="100"}' >> $logfile
+        c:\windows\system32\winrm.cmd set winrm/config/service '@{AllowUnencrypted="true"}' >> $logfile
+        c:\windows\system32\winrm.cmd set winrm/config/listener?Address=*+Transport=HTTP '@{Port="5985"}' >> $logfile
+        Set-Item wsman:\localhost\plugin\microsoft.powershell\Quotas\MaxMemoryPerShellMB 2048 >> $logfile 2>&1
+        restart-service winrm
+        c:\windows\system32\winrm.cmd set winrm/config/service/auth '@{Basic="true"}' >> $logfile
+        c:\windows\system32\netsh.exe advfirewall firewall set rule name="Windows Remote Management (HTTP-In)" profile=public protocol=tcp localport=5985 remoteip=localsubnet new remoteip=any  >> $logfile
+        </powershell>
+      block_device_mappings:
+        - device_name: /dev/sda1
+          ebs:
+            delete_on_termination: true
+      tags:
+        Name: windows-2016-salt-2017-7-py3-ec2
+
+suites:
+  - name: state1-win
+    run_list:
+    attributes:
+    provisioner:
+      is_file_root: true
+      require_chef: false
+      state_top:
+        base:
+          '*':
+            - state1
+    verifier:
+      patterns:
+        - '**/tests/integration/state1/serverspec/win_*defaults*_spec.rb'
+    includes:
+      - windows-2016-salt-2018-3-py2-ec2
+      - windows-2012r2-salt-2018-3-py2-ec2
+      - windows-2016-salt-2018-3-py3-ec2
+      - windows-2012r2-salt-2018-3-py3-ec2
+      - windows-2016-salt-2017-7-py2-ec2
+      - windows-2012r2-salt-2017-7-py2-ec2
+      - windows-2016-salt-2017-7-py3-ec2
+      - windows-2012r2-salt-2017-7-py3-ec2
+  - name: state1-win-pillar
+    run_list:
+    attributes:
+    provisioner:
+      is_file_root: true
+      require_chef: false
+      state_top:
+        base:
+          '*':
+            - state1
+      pillars:
+        top.sls:
+          base:
+            '*':
+              - pillar1
+        pillar1.sls:
+          state1:
+            file_data: 'wohoo saltconf18'
+    verifier:
+      patterns:
+        - '**/tests/integration/state1/serverspec/win_*pillar1*_spec.rb'
+    includes:
+      - windows-2016-salt-2018-3-py2-ec2
+  - name: state1-linux
+    run_list:
+    attributes:
+    provisioner:
+      is_file_root: true
+      require_chef: false
+      state_top:
+        base:
+          '*':
+            - state1
+    verifier:
+      patterns:
+        - '**/tests/integration/state1/serverspec/linux_*defaults*_spec.rb'
+    includes:
+      - centos-7-salt-latest-ec2
+      - ubuntu-1804-salt-latest-ec2
+  - name: state1-pillar1-linux
+    run_list:
+    attributes:
+    provisioner:
+      is_file_root: true
+      require_chef: false
+      state_top:
+        base:
+          '*':
+            - state1
+      pillars:
+        top.sls:
+          base:
+            '*':
+              - mytestpillar
+        mytestpillar.sls:
+          state1:
+            file_data: 'saltconf18!'
+    verifier:
+      patterns:
+        - '**/tests/integration/state1/serverspec/linux_*pillar1*_spec.rb'
+    includes:
+      - centos-7-salt-latest-ec2
+      - ubuntu-1804-salt-latest-ec2
+
+verifier:
+  name: serverspec
+  remote_exec: false
+  #format: RspecJunitFormatter
+  format: documentation
+  generate_output_filename: true
+  # extra_flags adding --out to set output file
+  extra_flags: '-I tests/integration/serverspec'
+  #  --out ../../<%= ENV['BUILD_TAG'] || 'NO_BUILD_TAG' %>-rspec-<%= ENV['SUITE'] || 'NO_SUITE' %>-<%= ENV['PLATFORM'] || 'NO_PLATFORM' %>.xml'
