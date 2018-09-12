@@ -3,6 +3,7 @@
 #### pytest setup
 
 Install the salt minion
+
 Install the pytest module via pip/package manager
 
 For windows, install via salt's pip:
@@ -13,6 +14,7 @@ c:\salt\salt-call state.single pip.installed name=pytest cwd='c:\salt\bin\script
 #### test-kitchen setup
 
 Install ruby via package manager (linux) or from rubyinstaller.org (windows)
+
 Install additional module requirements via `gem`
 ```
 gem install serverspec kitchen-salt test-kitchen rspec_junit_formatter \
