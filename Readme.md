@@ -393,3 +393,126 @@ Finished in 0.57813 seconds (files took 9.8 seconds to load)
        Finished testing <state1-linux-ubuntu-1804-salt-latest-ec2> (13m50.79s).
 -----> Kitchen is finished. (13m53.96s)
 ```
+
+## Running rspec tests against non-kitchen managed nodes
+
+One thing I like about having rspec tests written, is that on top of using them with test-kitchen, they can also be used against a system that was created by some other means (i.e. not by the test-kitchen process).  While using ``test=True`` on a ``state.apply`` can show us a lot of what may change or be needed for a minion, it can be lacking at times.  Other scenarios where this has been useful is testing a node for "standards" without needing to use salt at all (perhaps systems managed by some other group who doesn't use salt, but is interested how they match up with your standards).  The "documentation" output mode and well written tests can give you excellent, human-readable documentation of what your states/formulas are doing.  This output can be given to anyone (other admins, auditors, etc) showing how the node compares to your standards.
+
+Running an rspec test against a live node is fairly simple and straight forward task:
+
+We could use our same spec helpers that we created initially (```win_spec_helper``` and ```linux_spec_helper```), but I prefer to have a secondary helper for testing non-kitchen machines (I'll also have other reasons for this that I'll discuss in the pillar section below).
+
+To use a custom helper, we'll modify our rspec test slightly.  The spec helper require will be modified with some string interpolation to use the default helper unless we select a different one with an environment variable.
+
+Thus, the line requiring our helper 
+```
+require 'linux_spec_helper'
+```
+becomes
+```
+require "#{ENV['SPEC_HELPER'] ? ENV['SPEC_HELPER'] : 'linux_spec_helper'}"
+```
+
+With this, our test will use the ```linux_spec_helper``` unless we supply a different one to include through the ```SPEC_HELPER``` environment variable.
+
+In this repository, there are two "custom" spec helpers named ```win_spec_helper_custom``` and ```linux_spec_helper_custom``` which will prompt you for information about the system to run the rspec tests against (if you take a peek at them, you could also supply the information via ```RSPEC_``` environment variables.
+
+So, to use the custom spec helper against a linux node and run our "state1" tests (still assuming we're running this on a windows system and we have a copy of the repo on our 'Administrator' account's desktop):
+
+```
+PS C:\Users\Administrator\Desktop\saltconf18\srv\salt>$Env:SPEC_HELPER='linux_spec_helper_custom'
+PS C:\Users\Administrator\Desktop\saltconf18\srv\salt>rspec -c --default-path c:/users/administrator/desktop/saltconf18/srv/salt -I .\tests\integration\serverspec -f documentation -P **\tests\integration\state1\serverspec\lin*default*spec.rb
+
+Enter servername:  somehost
+Enter username:  myusername
+Enter a comma delimited set of auth methods (keyboard-interactive/publickey/hostbased/password) [publickey]:  keyboard-interactive
+Enter password:
+File /tmp/rhel-7
+  exists (FAILED - 1)
+  has 'our junk file data' (FAILED - 2)
+
+File /tmp/rhel-7
+  exists (FAILED - 3)
+  has 'our junk file data' (FAILED - 4)
+
+Failures:
+
+  1) File /tmp/rhel-7 exists
+     On host `somehost'
+     Failure/Error: expect(f).to exist
+       expected File "/tmp/rhel-7" to exist
+       /bin/sh -c test\ -e\ /tmp/rhel-7
+
+     # c:/Users/Administrator/Desktop/saltconf18/srv/salt/state1/tests/integration/state1/serverspec/linux_state1_defaults_spec.rb:15:in `block (2 levels) in <top (required)>'
+
+  2) File /tmp/rhel-7 has 'our junk file data'
+     On host `somehost'
+     Failure/Error: expect(f.content).to match %r{^our junk file data$}
+       expected "" to match /^our junk file data$/
+       Diff:
+       @@ -1,2 +1,2 @@
+       -/^our junk file data$/
+       +""
+
+       /bin/sh -c cat\ /tmp/rhel-7\ 2\>\ /dev/null\ \|\|\ echo\ -n
+
+     # c:/Users/Administrator/Desktop/saltconf18/srv/salt/state1/tests/integration/state1/serverspec/linux_state1_defaults_spec.rb:18:in `block (2 levels) in <top (required)>'
+
+  3) File /tmp/rhel-7 exists
+     On host `somehost'
+     Failure/Error: expect(f).to exist
+       expected File "/tmp/rhel-7" to exist
+       /bin/sh -c test\ -e\ /tmp/rhel-7
+
+     # C:/Users/Administrator/Desktop/saltconf18/srv/salt/state1/tests/integration/state1/serverspec/linux_state1_defaults_spec.rb:15:in `block (2 levels) in <top (required)>'
+
+  4) File /tmp/rhel-7 has 'our junk file data'
+     On host `somehost'
+     Failure/Error: expect(f.content).to match %r{^our junk file data$}
+       expected "" to match /^our junk file data$/
+       Diff:
+       @@ -1,2 +1,2 @@
+       -/^our junk file data$/
+       +""
+
+       /bin/sh -c cat\ /tmp/rhel-7\ 2\>\ /dev/null\ \|\|\ echo\ -n
+
+     # C:/Users/Administrator/Desktop/saltconf18/srv/salt/state1/tests/integration/state1/serverspec/linux_state1_defaults_spec.rb:18:in `block (2 levels) in <top (required)>'
+
+Finished in 0.59376 seconds (files took 13.98 seconds to load)
+4 examples, 4 failures
+
+Failed examples:
+
+rspec c:/Users/Administrator/Desktop/saltconf18/srv/salt/state1/tests/integration/state1/serverspec/linux_state1_defaults_spec.rb:14 # File /tmp/rhel-7 exists
+rspec c:/Users/Administrator/Desktop/saltconf18/srv/salt/state1/tests/integration/state1/serverspec/linux_state1_defaults_spec.rb:17 # File /tmp/rhel-7 has 'our junk file data'
+rspec C:/Users/Administrator/Desktop/saltconf18/srv/salt/state1/tests/integration/state1/serverspec/linux_state1_defaults_spec.rb:14 # File /tmp/rhel-7 exists
+rspec C:/Users/Administrator/Desktop/saltconf18/srv/salt/state1/tests/integration/state1/serverspec/linux_state1_defaults_spec.rb:17 # File /tmp/rhel-7 has 'our junk file data'
+```
+
+## Pillar usage in tests
+
+A few people asked me about using pillar data to drive your rspec tests after my presentation, so I'm adding this info here...
+
+Pillar data can be automatically pulled in to your rspec tests -- whether run via test-kitchen or when run against production (or non-kitchen created nodes).  This can be done by kitchen-test created nodes (who get their pillar by definitions in ```.kitchen.yml```) or using our custom spec helpers against systems getting their pillar from a master.
+
+The file ```get_pillar_data.rb``` has been added to the repo to handle getting the pillar.  This file runs a salt-call to get pillar data as json and then converts that json into a ruby hash.  Requiring this file in the test file will be step 1.  This file uses the environment variables ```KITCHEN_HOSTNAME``` and ```KITCHEN_USERNAME``` to determine if rspec is being run by kitchen or just by rspec.  If it is kitchen, then it will pass the ```--config-dir``` parameter to the salt-call commands to ensure the pillar data comes from the correct place (test-kitchen creates a pillar files from the data in .kitchen.yml and then tells the minion being run by test-kitchen where to find them via a custom minion config file).
+
+Next, we'll need to change our tests to accept parameters.  This could be done in a number of ways, but my preference is to use [shared examples](https://relishapp.com/rspec/rspec-core/docs/example-groups/shared-examples).  In the 'state1' tests folder, there is a ```state1_shared.rb``` which defines the shared example for state1 and a ```linux_state1_custom_pillar.rb``` which gets its test from that file.  The shared example includes parameters which match up to the pillar data we could pass in.  The ```linux_state1_custom_pillar``` file then requires the shared file and includes the tests.  As part of the include, we pass the pillar data that was pulled via the ```get_pillar_data``` so the tests are run with our pillar values (or the defaults if no pillar data exists).
+
+One thing to note: is that our pillar key names need to start with lower-case letters.  A variable name that starts with an upper-case letter in Ruby is a constant and can't be modified.  For this reason, all the pillar definable options in our defaults.yml must start with a lower-case letter so we can pass them through and modify the parameter to our shared example.
+
+
+## Running serverspec tests through the salt-minion channel
+
+It is possible to run serverspec tests through the salt-minion.  This can be accomplished by adding a salt backend to serverspec which uses the ruby salt-api interface.  I did this in a proof on concept type situation, but have not released or uploaded any of the code.
+
+While this is great for not needing to authenticate to the system being tested (as that is done via salt), it adds a lot of overhead and slows the tests down considerably.
+
+A set of tests that took about 3-5 minutes to run by SSH/WinRM took approximately 45 minutes to run through the salt-api.  This seems to be caused by the few seconds (if that) that are required to connect to the api, publish the job, the minion pick the job up, execute it, send a return to the master, and then the api client pick up the return and send the response back through serverspec.  When that process is repeated over hundreds of tests, it takes its toll.
+
+That slow down is the main reason I haven't published any code related to it.  It wouldn't surprise me if there were some tweaks/etc that could be done to speed things up, but I'm not sure if the effort is worth it in the end.
+
+If testing over the salt-minion channel is really desired or required, the [saltcheck module](https://docs.saltstack.com/en/latest/ref/modules/all/salt.modules.saltcheck.html)  may be the better solution for that.
+
+

@@ -1,6 +1,6 @@
 # require the linux_spec_helper.rb file
 # this sets up the ssh connection
-require 'linux_spec_helper'
+require "#{ENV['SPEC_HELPER'] ? ENV['SPEC_HELPER'] : 'linux_spec_helper'}"
 
 the_file = '/tmp/everything.txt'
 
