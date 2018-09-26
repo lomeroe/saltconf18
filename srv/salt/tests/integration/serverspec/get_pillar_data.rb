@@ -6,9 +6,8 @@ config_param = ''
 if ENV['KITCHEN_HOSTNAME'] and ENV['KITCHEN_USERNAME']
     # if we used a custom provisioner root_path, this would need to be modified to handle that
     kitchen_config_path = "/tmp/kitchen/etc/salt"
-    if :os == 'windows'
-        kitchen_root_path = command("powershell write-host $Env:TEMP")
-        kitchen_config_path = File.join(kitchen_root_path.stdout, "kitchen", "etc", "salt")
+    if os[:family] == 'windows'
+        kitchen_config_path = command("powershell join-path $Env:TEMP $(join-path kitchen $(join-path etc salt))").stdout.strip
     end
     config_param = "--config-dir \"#{kitchen_config_path}\""
 else
